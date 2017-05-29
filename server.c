@@ -1,40 +1,15 @@
+#include "./include/server.h"
+#include "./include/util_http.h"
+#include "./include/cJSON.h"
 #include <stdio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <string.h>
 #include <stdlib.h>
-#include <arpa/inet.h> 
+#include <arpa/inet.h>
 #include <unistd.h>
 #include <sys/epoll.h>
 #include <fcntl.h>
-
-#define PORT 8080
-#define HOST "127.0.0.1"
-#define BUFF_SIZE 1024
-#define REQUEST_QUEUE_LENGTH 10
-#define FD_SIZE 1024
-#define MAX_EVENTS 256
-
-char *header_tmpl = "HTTP/1.1 200 OK\r\n"
-        "Server: ZBS's Server V1.0\r\n"
-        "Accept-Ranges: bytes\r\n"
-        "Content-Length: %d\r\n"
-        "Connection: close\r\n"
-        "Content-Type: text/html\r\n\r\n";
-
-int server_start();
-
-char *deal_request(char *http_request);
-
-char *exec_php(char *args);
-
-void epoll_register(int epoll_fd, int fd, int state);
-
-void epoll_cancel(int epoll_fd, int fd, int state);
-
-void accept_client(int server_fd, int epoll_fd);
-
-void deal_client(int client_fd, int epoll_fd);
 
 /**
  * 创建一个server socket
@@ -52,7 +27,7 @@ int server_start() {
 
     // 获取服务器socket的设置，并添加"不阻塞"选项
     flags = fcntl(sock_fd, F_GETFL, 0);
-    fcntl(sock_fd, F_SETFL, flags|O_NONBLOCK);
+    fcntl(sock_fd, F_SETFL, flags | O_NONBLOCK);
 
     if (bind(sock_fd, (struct sockaddr *) &server_addr, sizeof(server_addr)) == -1) {
         perror("bind_error");
@@ -72,19 +47,57 @@ int server_start() {
  *
  * @param request_content
  */
-char *deal_request(char *request_content) {
-    static char *result;
-    char *first_line = strtok(request_content, "\n"); // 获取第一行 结构类似 "GET /path VERSION"
-    char *method = strtok(first_line, " ");  // 获取到请求方法
-    if (strcmp(method, "GET") != 0) {
-        result = "只支持HTTP GET 方法！";
-    } else {
-        char *param = strtok(NULL, " ");  // 获取到参数
-        result = exec_php(param);
-    }
+char *deal_request(char *request_content, int client_fd) {
+    struct sockaddr_in client_addr;
+    socklen_t len_client_addr = sizeof(client_addr);
+    struct request cgi_request;
 
-    return result;
+    parse_request(request_content, &cgi_request);
+    cgi_request.SERVER_PORT = PORT;
+    getpeername(client_fd, (struct sockaddr *) &client_addr, &len_client_addr);
+    inet_ntop(AF_INET, &client_addr.sin_addr, cgi_request.REMOTE_ADDR, sizeof(cgi_request.REMOTE_ADDR));
+
+    char *request_json = create_json(&cgi_request);
+    char *response_json = exec_php(request_json);
+
+    // todo parse json and build http_response
+    return response_json;
 }
+
+char *create_json(struct request *cgi_request) {
+    cJSON *root;
+    root = cJSON_CreateObject();
+
+    cJSON_AddStringToObject(root, "REQUEST_METHOD", cgi_request->REQUEST_METHOD);
+    cJSON_AddStringToObject(root, "SCRIPT_NAME", cgi_request->SCRIPT_NAME);
+    cJSON_AddStringToObject(root, "SERVER_PROTOCOL", cgi_request->SERVER_PROTOCOL);
+    cJSON_AddStringToObject(root, "SERVER_NAME", cgi_request->SERVER_NAME);
+    cJSON_AddStringToObject(root, "QUERY_STRING", cgi_request->QUERY_STRING);
+    cJSON_AddStringToObject(root, "REMOTE_ADDR", cgi_request->REMOTE_ADDR);
+    cJSON_AddStringToObject(root, "CONTENT_TYPE", cgi_request->CONTENT_TYPE);
+    cJSON_AddStringToObject(root, "POST_DATA", cgi_request->POST_DATA);
+    cJSON_AddNumberToObject(root, "SERVER_PORT", cgi_request->SERVER_PORT);
+    cJSON_AddNumberToObject(root, "CONTENT_LENGTH", cgi_request->CONTENT_LENGTH);
+
+    char *json = cJSON_PrintUnformatted(root);
+
+    cJSON_Delete(root);
+
+    return json;
+}
+
+/*
+ * todo define response struct and build response header
+   void parse_json(char *response_json, struct response *cgi_response) {
+    cJSON *json = cJSON_Parse(response_json);
+
+    cgi_response.CONTENT_TYPE = cJSON_GetObjectItem(cJSON, "CONTENT_TYPE");
+    cgi_response.HTTP_CODE = cJSON_GetObjectItem(cJSON, "HTTP_CODE");
+    cgi_response.RESPONSE_CONTENT = cJSON_GetObjectItem(cJSON, "RESPONSE_CONTENT");
+
+    return;
+}
+*/
 
 /**
  * 执行PHP脚本以返回执行结果
@@ -173,7 +186,7 @@ void deal_client(int client_fd, int epoll_fd) {
         return;
     }
 
-    response_content = deal_request(http_request);
+    response_content = deal_request(http_request, client_fd);
     sprintf(response_header, header_tmpl, strlen(response_content));
     sprintf(http_response, "%s%s", response_header, response_content);
     send(client_fd, http_response, sizeof(http_response), 0);
@@ -189,15 +202,15 @@ int main() {
 
     server_fd = server_start();
     epoll_fd = epoll_create(FD_SIZE);
-    epoll_register(epoll_fd, server_fd, EPOLLIN|EPOLLET);// 这里注册socketEPOLL事件为ET模式
+    epoll_register(epoll_fd, server_fd, EPOLLIN | EPOLLET);// 这里注册socketEPOLL事件为ET模式
 
     while (1) {
         event_num = epoll_wait(epoll_fd, events, MAX_EVENTS, 0);
         for (i = 0; i < event_num; i++) {
             fd = events[i].data.fd;
-            if ((fd == server_fd) && (events[i].events == EPOLLIN)){
+            if ((fd == server_fd) && (events[i].events == EPOLLIN)) {
                 accept_client(server_fd, epoll_fd);
-            } else if (events[i].events == EPOLLIN){
+            } else if (events[i].events == EPOLLIN) {
                 deal_client(fd, epoll_fd);
             } else if (events[i].events == EPOLLOUT)
                 // todo 数据过大，缓冲区不足的情况待处理
