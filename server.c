@@ -216,5 +216,6 @@ int main() {
                 // todo 数据过大，缓冲区不足的情况待处理
                 continue;
         }
+        usleep(EPOLL_WAIT_US);
     }
 }

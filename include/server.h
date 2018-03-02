@@ -6,6 +6,7 @@
 #define REQUEST_QUEUE_LENGTH 10
 #define FD_SIZE 1024
 #define MAX_EVENTS 256
+#define EPOLL_WAIT_US 10
 
 char *header_tmpl = "HTTP/1.1 200 OK\r\n"
         "Server: ZBS's Server V1.0\r\n"
