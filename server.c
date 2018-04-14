@@ -178,6 +178,8 @@ void deal_client(int client_fd, int epoll_fd) {
     char *response_content;
     char http_request[BUFF_SIZE], response_header[BUFF_SIZE], http_response[BUFF_SIZE];
     memset(http_request, 0, BUFF_SIZE); // 清空缓冲区内容
+    
+    // fixme, 超过BUFF_SIZE的数据接收不到，使用while循环接收数据，直到返回EAGAIN ERROR
     recv(client_fd, http_request, BUFF_SIZE, 0);
 
     // 如果收到请求内容为空的，表示客户端正常断开的连接
